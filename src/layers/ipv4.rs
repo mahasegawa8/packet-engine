@@ -23,6 +23,15 @@ impl Ipv4Header {
             return Err("Unsupported IPv4 version");
         }
 
+        if ihl < 5 {
+            return Err("Invalid IPv4 header length (IHL must be >= 5)");
+        }
+
+        let header_len = (ihl as usize) * 4;
+        if packet.len() < header_len {
+            return Err("Packet too short for IPv4 options");
+        }
+
         let ttl = packet[8];
         let protocol = packet[9];
 
@@ -39,7 +48,8 @@ impl Ipv4Header {
             src_ip,
             dst_ip,
         };
-        Ok((header, &packet[Self::MIN_HEADER_LEN..]))
+
+        Ok((header, &packet[header_len..]))
     }
 }
 
@@ -67,6 +77,35 @@ mod tests {
         assert_eq!(hdr.src_ip, [192, 168, 1, 10]);
         assert_eq!(hdr.dst_ip, [192, 168, 1, 20]);
         assert_eq!(payload, &[0xde, 0xad, 0xbe, 0xef]);
+    }
+
+    #[test]
+    fn parse_ipv4_with_options() {
+        let packet = [
+            0x46, 0x00, 0x00, 0x1c,
+            0x00, 0x00, 0x00, 0x00,
+            0x40, 0x06, 0x00, 0x00,
+            192, 168, 1, 10,
+            192, 168, 1, 20,
+            0x01, 0x01, 0x01, 0x01,
+            0xaa, 0xbb, 0xcc, 0xdd,
+        ];
+
+        let (hdr, payload) = Ipv4Header::parse(&packet).unwrap();
+
+        assert_eq!(hdr.ihl, 6);
+        assert_eq!(payload, &[0xaa, 0xbb, 0xcc, 0xdd]);
+    }
+
+    #[test]
+    fn parse_ipv4_invalid_ihl() {
+        let mut packet = [0u8; 20];
+        packet[0] = 0x44;
+
+        assert_eq!(
+            Ipv4Header::parse(&packet),
+            Err("Invalid IPv4 header length (IHL must be >= 5)")
+        );
     }
 }
 
