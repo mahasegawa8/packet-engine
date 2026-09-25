@@ -84,6 +84,46 @@ impl PcapPacketHeader {
     }
 }
 
+pub struct PcapReader<'a> {
+    pub global_header: PcapGlobalHeader,
+    remaining: &'a [u8],
+}
+
+impl<'a> PcapReader<'a> {
+    pub fn new(data: &'a [u8]) -> Result<Self, &'static str> {
+        let (global_header, remaining) = PcapGlobalHeader::parse(data)?;
+        Ok(Self {
+            global_header,
+            remaining,
+        })
+    }
+}
+
+impl<'a> Iterator for PcapReader<'a> {
+    type Item = Result<PcapPacket<'a>, &'static str>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining.is_empty() {
+            return None;
+        }
+
+        let (header, rem) = match PcapPacketHeader::parse(self.remaining) {
+            Ok(res) => res,
+            Err(e) => return Some(Err(e)),
+        };
+
+        let len = header.incl_len as usize;
+        if rem.len() < len {
+            return Some(Err("Packet truncated: incl_len exceeds buffer"));
+        }
+
+        let data = &rem[..len];
+        self.remaining = &rem[len..];
+
+        Some(Ok(PcapPacket { header, data }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +187,48 @@ mod tests {
             PcapPacketHeader::parse(&data),
             Err("Data too short for PCAP packet header")
         );
+    }
+
+    #[test]
+    fn pcap_reader_iterates_packets() {
+        let mut pcap_data = Vec::new();
+
+        pcap_data.extend_from_slice(&[
+            0xd4, 0xc3, 0xb2, 0xa1,
+            0x02, 0x00, 0x04, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0xff, 0xff, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x00,
+        ]);
+
+        pcap_data.extend_from_slice(&[
+            0x01, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x03, 0x00, 0x00, 0x00,
+            0x03, 0x00, 0x00, 0x00,
+        ]);
+        pcap_data.extend_from_slice(&[0x11, 0x22, 0x33]);
+
+        pcap_data.extend_from_slice(&[
+            0x02, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x02, 0x00, 0x00, 0x00,
+            0x02, 0x00, 0x00, 0x00,
+        ]);
+        pcap_data.extend_from_slice(&[0xaa, 0xbb]);
+
+        let mut reader = PcapReader::new(&pcap_data).unwrap();
+
+        let pkt1 = reader.next().unwrap().unwrap();
+        assert_eq!(pkt1.header.ts_sec, 1);
+        assert_eq!(pkt1.data, &[0x11, 0x22, 0x33]);
+
+        let pkt2 = reader.next().unwrap().unwrap();
+        assert_eq!(pkt2.header.ts_sec, 2);
+        assert_eq!(pkt2.data, &[0xaa, 0xbb]);
+
+        assert!(reader.next().is_none());
     }
 }
 
