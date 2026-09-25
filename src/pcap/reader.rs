@@ -45,7 +45,45 @@ impl PcapGlobalHeader {
         Ok((header, &data[Self::HEADER_LEN..]))
     }
 }
-    
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct PcapPacketHeader {
+    pub ts_sec: u32,
+    pub ts_usec: u32,
+    pub incl_len: u32,
+    pub orig_len: u32,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct PcapPacket<'a> {
+    pub header: PcapPacketHeader,
+    pub data: &'a [u8],
+}
+
+impl PcapPacketHeader {
+    pub const HEADER_LEN: usize = 16;
+
+    pub fn parse(data: &[u8]) -> Result<(Self, &[u8]), &'static str> {
+        if data.len() < Self::HEADER_LEN {
+            return Err("Data too short for PCAP packet header");
+        }
+
+        let ts_sec = u32::from_le_bytes(data[0..4].try_into().unwrap());
+        let ts_usec = u32::from_le_bytes(data[4..8].try_into().unwrap());
+        let incl_len = u32::from_le_bytes(data[8..12].try_into().unwrap());
+        let orig_len = u32::from_le_bytes(data[12..16].try_into().unwrap());
+
+        let header = PcapPacketHeader {
+            ts_sec,
+            ts_usec,
+            incl_len,
+            orig_len,
+        };
+
+        Ok((header, &data[Self::HEADER_LEN..]))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,6 +117,35 @@ mod tests {
         assert_eq!(
             PcapGlobalHeader::parse(&data),
             Err("Data too short for PCAP global header")
+        );
+    }
+
+    #[test]
+    fn parse_valid_packet_header() {
+        let data = [
+            0x65, 0x00, 0x00, 0x00,
+            0x2a, 0x00, 0x00, 0x00,
+            0x04, 0x00, 0x00, 0x00,
+            0x04, 0x00, 0x00, 0x00,
+            0xaa, 0xbb, 0xcc, 0xdd,
+            0xff, 0xff,
+        ];
+
+        let (hdr, packet_data) = PcapPacketHeader::parse(&data).unwrap();
+
+        assert_eq!(hdr.ts_sec, 101);
+        assert_eq!(hdr.ts_usec, 42);
+        assert_eq!(hdr.incl_len, 4);
+        assert_eq!(hdr.orig_len, 4);
+        assert_eq!(packet_data, &[0xaa, 0xbb, 0xcc, 0xdd, 0xff, 0xff]);
+    }
+
+    #[test]
+    fn parse_packet_header_too_short() {
+        let data = [0x65, 0x00, 0x00, 0x00];
+        assert_eq!(
+            PcapPacketHeader::parse(&data),
+            Err("Data too short for PCAP packet header")
         );
     }
 }
