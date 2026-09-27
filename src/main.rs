@@ -5,7 +5,24 @@ use std::process;
 use packet_engine::layers::ethernet::{EtherType, EthernetHeader};
 use packet_engine::layers::ipv4::Ipv4Header;
 use packet_engine::layers::udp::UdpHeader;
+use packet_engine::layers::tcp::{TcpFlags, TcpHeader};
 use packet_engine::pcap::reader::PcapReader;
+
+fn format_tcp_flags(flags: &TcpFlags) -> String {
+    let mut active = Vec::new();
+    if flags.syn { active.push("SYN"); }
+    if flags.ack { active.push("ACK"); }
+    if flags.fin { active.push("FIN"); }
+    if flags.rst { active.push("RST"); }
+    if flags.psh { active.push("PSH"); }
+    if flags.urg { active.push("URG"); }
+
+    if active.is_empty() {
+        "NONE".to_string()
+    } else {
+        active.join(", ")
+    }
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -91,32 +108,64 @@ fn main() {
             ip_hdr.ttl
         );
 
-        if ip_hdr.protocol  != 17 {
-            continue;
-        }
+        match ip_hdr.protocol {
+            // TCP
+            6 => {
+                let (tcp_hdr, app_payload) = match TcpHeader::parse(l4_payload) {
+                    Ok(res) => res,
+                    Err(e) => {
+                        eprintln!(" [L4 Error] {}", e);
+                        continue;
+                    }
+                };
 
-        // 3. Layer 4: UDP
-        let (udp_hdr, app_payload) = match UdpHeader::parse(l4_payload) {
-            Ok(res) => res,
-            Err(e) => {
-                eprintln!("[L4 Error] {}", e);
-                continue;
+                println!(
+                    " [L4 TCP] Port {} -> {} | Flags: [{}] | Seq: {} | Ack: {} | Win: {}",
+                    tcp_hdr.src_port,
+                    tcp_hdr.dst_port,
+                    format_tcp_flags(&tcp_hdr.flags),
+                    tcp_hdr.sequence_number,
+                    tcp_hdr.acknowledgment_number,
+                    tcp_hdr.window_size,
+                );
+
+                if !app_payload.is_empty() {
+                    println!(
+                        " [Payload] {} bytes | Raw bytes: {:02x?}",
+                        app_payload.len(),
+                        &app_payload[..app_payload.len().min(16)]
+                    );
+                }
             }
-        };
+            // UDP
+            17 => {
+                let (udp_hdr, app_payload) = match UdpHeader::parse(l4_payload) {
+                    Ok(res) => res,
+                    Err(e) => {
+                        eprintln!(" [L4 Error] {}", e);
+                        continue;
+                    }
+                };
 
-        println!(
-            "[L4 UDP] Port {} -> {} | Length: {} bytes",
-            udp_hdr.src_port,
-            udp_hdr.dst_port,
-            udp_hdr.length
-        );
+                println!(
+                    " [L4 UDP] Port {} -> {} | Length: {} bytes",
+                    udp_hdr.src_port,
+                    udp_hdr.dst_port,
+                    udp_hdr.length
+                );
 
-        // 4. Payload
-        println!(
-            "[Payload] {} bytes | Raw bytes: {:02x?}",
-            app_payload.len(),
-            &app_payload[..app_payload.len().min(16)]
-        );
+                if !app_payload.is_empty() {
+                    println!(
+                        " [Payload] {} bytes | Raw bytes: {:02x?}",
+                        app_payload.len(),
+                        &app_payload[..app_payload.len().min(16)]
+                    );
+                }
+            }
+            other => {
+                println!(" [L4] Unsupported protocol: {}", other);
+            }
+        }
     }
 }
 
